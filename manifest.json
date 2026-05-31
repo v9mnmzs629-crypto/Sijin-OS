@@ -1,0 +1,14 @@
+{
+  "name": "Sijin OS",
+  "short_name": "Sijin OS",
+  "description": "Personal command centre",
+  "start_url": "/Sijin-OS/",
+  "scope": "/Sijin-OS/",
+  "display": "standalone",
+  "background_color": "#080c12",
+  "theme_color": "#080c12",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "/Sijin-OS/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
