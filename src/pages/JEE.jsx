@@ -1,72 +1,72 @@
 import { useState, useEffect } from "react";
 import { useFirestore } from "../hooks/useFirestore";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
 const SUBJECTS = {
-  Maths: {
-    label: "Maths",
-    icon: "∑",
-    theme: "theme-maths",
-    accent: "#0ea5e9",
-    bg: "linear-gradient(135deg, rgba(14,165,233,0.08), rgba(3,105,161,0.04))",
-    border: "rgba(14,165,233,0.2)",
-  },
-  Chemistry: {
-    label: "Chemistry",
-    icon: "⚗",
-    theme: "theme-chemistry",
-    accent: "#10b981",
-    bg: "linear-gradient(135deg, rgba(16,185,129,0.08), rgba(5,150,105,0.04))",
-    border: "rgba(16,185,129,0.2)",
-  },
-  Physics: {
-    label: "Physics",
-    icon: "⚡",
-    theme: "theme-physics",
-    accent: "#a855f7",
-    bg: "linear-gradient(135deg, rgba(168,85,247,0.08), rgba(124,58,237,0.04))",
-    border: "rgba(168,85,247,0.2)",
-  },
+  Maths: { label: "Maths", icon: "∑", theme: "theme-maths", accent: "#0ea5e9", bg: "linear-gradient(135deg, rgba(14,165,233,0.08), rgba(3,105,161,0.04))", border: "rgba(14,165,233,0.2)" },
+  Chemistry: { label: "Chemistry", icon: "⚗", theme: "theme-chemistry", accent: "#10b981", bg: "linear-gradient(135deg, rgba(16,185,129,0.08), rgba(5,150,105,0.04))", border: "rgba(16,185,129,0.2)" },
+  Physics: { label: "Physics", icon: "⚡", theme: "theme-physics", accent: "#a855f7", bg: "linear-gradient(135deg, rgba(168,85,247,0.08), rgba(124,58,237,0.04))", border: "rgba(168,85,247,0.2)" },
 };
 
-const STATUS_OPTIONS = ["Not Started", "Learning", "Revised", "Mastered"];
-const LEVEL_OPTIONS = ["High", "Medium", "Low"];
-
-const STATUS_COLORS = {
-  "Not Started": { bg: "rgba(100,116,139,0.15)", color: "#64748b" },
-  "Learning": { bg: "rgba(245,158,11,0.15)", color: "#f59e0b" },
-  "Revised": { bg: "rgba(59,130,246,0.15)", color: "#60a5fa" },
-  "Mastered": { bg: "rgba(16,185,129,0.15)", color: "#10b981" },
+// ---- Schedule settings (edit here to tune) ----
+const DIFFS = {
+  easy: { label: "Easy", color: "#10b981", days: [7, 30, 75] },
+  medium: { label: "Medium", color: "#f59e0b", days: [4, 18, 49] },
+  hard: { label: "Hard", color: "#f97316", days: [2, 8, 24] },
+  vhard: { label: "Very hard", color: "#ef4444", days: [1, 4, 10] },
 };
+const RANK = { easy: 0, medium: 1, hard: 2, vhard: 3 };
+const LEARN_SLOTS = [0, 1, 1, 0, 1, 2, 1]; // Sun..Sat (Mon/Tue/Thu = half module, Fri = 2 backlogs, Sat = up to 1)
+const REV_SLOTS = [2, 0, 0, 3, 2, 0, 0];
+const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const RECENT_DAYS = 14, MEDIUM_DAYS = 42;
+const SET = "jee_tracker";
 
-const LEVEL_COLORS = {
-  High: { bg: "rgba(239,68,68,0.12)", color: "#ef4444" },
-  Medium: { bg: "rgba(245,158,11,0.12)", color: "#f59e0b" },
-  Low: { bg: "rgba(16,185,129,0.12)", color: "#10b981" },
+// ---- Dates (UAE time) ----
+const todayStr = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Dubai" }).format(new Date());
+const ms = s => Date.parse(s + "T00:00:00Z");
+const addDays = (s, n) => new Date(ms(s) + n * 864e5).toISOString().slice(0, 10);
+const daysBetween = (a, b) => Math.round((ms(b) - ms(a)) / 864e5);
+const dow = s => new Date(ms(s)).getUTCDay();
+const nice = s => s ? new Date(ms(s)).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" }) : "-";
+
+const ageOf = (t, today) => {
+  const d = daysBetween(t.taughtDate || today, today);
+  return d < RECENT_DAYS ? "recent" : d < MEDIUM_DAYS ? "medium" : "old";
 };
+const AGE_RANK = { recent: 0, medium: 1, old: 2 };
+const AGE_COLOR = { recent: "#60a5fa", medium: "#f59e0b", old: "#ef4444" };
 
-function Badge({ value, map }) {
-  const c = map[value] || map["Medium"] || { bg: "rgba(100,116,139,0.15)", color: "#64748b" };
+function Tag({ label, color }) {
   return (
     <span style={{
-      background: c.bg, color: c.color,
-      padding: '2px 8px', borderRadius: 99,
-      fontSize: 10, fontWeight: 600, fontFamily: 'Syne',
-      whiteSpace: 'nowrap', textTransform: 'uppercase', letterSpacing: '0.04em'
-    }}>
-      {value}
-    </span>
+      background: `${color}22`, color, padding: "2px 8px", borderRadius: 99, fontSize: 10,
+      fontWeight: 600, fontFamily: "Syne", whiteSpace: "nowrap", textTransform: "uppercase", letterSpacing: "0.04em"
+    }}>{label}</span>
   );
 }
+
+const F = ({ l, children }) => (
+  <div>
+    <label style={{ fontSize: 11, color: "var(--text-secondary)", display: "block", marginBottom: 6 }}>{l}</label>
+    {children}
+  </div>
+);
+
+const Modal = ({ title, accent, onClose, children }) => (
+  <div className="modal-overlay" onClick={onClose}>
+    <div className="modal" onClick={e => e.stopPropagation()} style={{ maxHeight: "90vh", overflowY: "auto" }}>
+      <h3 style={{ fontFamily: "Syne", fontWeight: 700, fontSize: 18, marginBottom: 20, color: accent }}>{title}</h3>
+      {children}
+    </div>
+  </div>
+);
 
 const CustomTooltip = ({ active, payload, label, accent }) => {
   if (active && payload && payload.length) {
     return (
-      <div style={{
-        background: 'var(--bg-card)', border: '1px solid var(--border)',
-        borderRadius: 8, padding: '10px 14px', fontFamily: 'DM Mono', fontSize: 12
-      }}>
-        <p style={{ color: 'var(--text-secondary)', marginBottom: 4 }}>{label}</p>
+      <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: 8, padding: "10px 14px", fontFamily: "DM Mono", fontSize: 12 }}>
+        <p style={{ color: "var(--text-secondary)", marginBottom: 4 }}>{label}</p>
         <p style={{ color: accent, fontWeight: 600 }}>{payload[0].value} / 240</p>
       </div>
     );
@@ -76,47 +76,82 @@ const CustomTooltip = ({ active, payload, label, accent }) => {
 
 export default function JEE({ userId, fabTrigger }) {
   const fs = useFirestore(userId);
+  const today = todayStr();
   const [activeSubject, setActiveSubject] = useState("Maths");
-  const [topics, setTopics] = useState({});
+  const [items, setItems] = useState([]);
   const [scores, setScores] = useState({});
-  const [showAddTopic, setShowAddTopic] = useState(false);
-
-  useEffect(() => { if (fabTrigger > 0) setShowAddTopic(true); }, [fabTrigger]);
+  const [showAll, setShowAll] = useState(false);
+  const [log, setLog] = useState(null);
+  const [pick, setPick] = useState(null);
+  const [edit, setEdit] = useState(null);
   const [showAddScore, setShowAddScore] = useState(false);
-  const [editTopic, setEditTopic] = useState(null);
-  const [newTopic, setNewTopic] = useState({
-    name: "", status: "Not Started", difficulty: "Medium",
-    weightage: "Medium", lastRevised: "", revisionCount: 0, notes: ""
-  });
   const [newScore, setNewScore] = useState({ exam: "", marks: "" });
 
   const subj = SUBJECTS[activeSubject];
+  const blankLog = (mode = "topic") => ({ mode, name: "", subject: activeSubject, chapter: "", state: "done", difficulty: "medium", date: today });
+
+  useEffect(() => { if (fabTrigger > 0) setLog(blankLog()); }, [fabTrigger]);
 
   useEffect(() => {
-    const unsubTopics = {};
-    const unsubScores = {};
-    Object.keys(SUBJECTS).forEach(s => {
-      unsubTopics[s] = fs.watchCollection(`jee_topics_${s}`, (data) => {
-        setTopics(prev => ({ ...prev, [s]: data }));
-      });
-      unsubScores[s] = fs.watchCollection(`jee_scores_${s}`, (data) => {
-        setScores(prev => ({ ...prev, [s]: data.sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || "")) }));
-      });
-    });
-    return () => {
-      Object.values(unsubTopics).forEach(u => u());
-      Object.values(unsubScores).forEach(u => u());
-    };
+    const u1 = fs.watchCollection(SET, setItems);
+    const us = Object.keys(SUBJECTS).map(s =>
+      fs.watchCollection(`jee_scores_${s}`, data =>
+        setScores(p => ({ ...p, [s]: data.sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || "")) }))
+      )
+    );
+    return () => { u1(); us.forEach(u => u()); };
   }, [userId]);
 
-  const currentTopics = topics[activeSubject] || [];
-  const currentScores = scores[activeSubject] || [];
+  // ---- Queues ----
+  const ongoing = items.filter(t => t.status === "ongoing").sort((a, b) => (a.startedDate || "").localeCompare(b.startedDate || ""));
+  const backlogs = items.filter(t => t.status === "backlog")
+    .sort((a, b) => AGE_RANK[ageOf(a, today)] - AGE_RANK[ageOf(b, today)] || (a.taughtDate || "").localeCompare(b.taughtDate || ""));
+  const learnQ = [...ongoing, ...backlogs];
+  const revQ = items.filter(t => t.status === "active" && t.nextDue && t.nextDue <= today)
+    .sort((a, b) => RANK[b.difficulty] - RANK[a.difficulty] || a.nextDue.localeCompare(b.nextDue));
+  const d = dow(today);
+  const recLearn = learnQ.slice(0, LEARN_SLOTS[d]);
+  const recRev = revQ.slice(0, REV_SLOTS[d]);
+  const restLearn = learnQ.slice(LEARN_SLOTS[d]);
+  const restRev = revQ.slice(REV_SLOTS[d]);
+  const upcoming = items.filter(t => t.status === "active" && t.nextDue > today).sort((a, b) => a.nextDue.localeCompare(b.nextDue));
 
-  const addTopic = async () => {
-    if (!newTopic.name.trim()) return;
-    await fs.addItem(`jee_topics_${activeSubject}`, newTopic);
-    setNewTopic({ name: "", status: "Not Started", difficulty: "Medium", weightage: "Medium", lastRevised: "", revisionCount: 0, notes: "" });
-    setShowAddTopic(false);
+  // ---- Actions ----
+  const submitLog = async () => {
+    if (!log.name.trim()) return;
+    const base = { name: log.name.trim(), subject: log.subject, chapter: log.chapter.trim(), notes: "" };
+    if (log.mode === "backlog") await fs.addItem(SET, { ...base, status: "backlog", taughtDate: log.date });
+    else if (log.state === "ongoing") await fs.addItem(SET, { ...base, status: "ongoing", startedDate: log.date });
+    else await fs.addItem(SET, { ...base, status: "active", difficulty: log.difficulty, stage: 0, lastDone: log.date, nextDue: addDays(log.date, DIFFS[log.difficulty].days[0]), history: [] });
+    setLog(null);
+  };
+
+  const applyPick = async diff => {
+    const { t, kind } = pick;
+    if (kind === "revise") {
+      const stage = RANK[diff] > RANK[t.difficulty] ? 0 : (t.stage || 0) + 1;
+      await fs.updateItem(SET, t.id, {
+        difficulty: diff, stage, lastDone: today,
+        nextDue: addDays(today, DIFFS[diff].days[Math.min(stage, 2)]),
+        history: [...(t.history || []), { date: today, difficulty: diff }],
+      });
+    } else {
+      await fs.updateItem(SET, t.id, { status: "active", difficulty: diff, stage: 0, lastDone: today, nextDue: addDays(today, DIFFS[diff].days[0]), history: [] });
+    }
+    setPick(null);
+  };
+
+  const startBacklog = t => fs.updateItem(SET, t.id, { status: "ongoing", startedDate: today });
+
+  const saveEdit = async () => {
+    const t = edit;
+    const upd = { name: t.name, chapter: t.chapter || "", notes: t.notes || "" };
+    if (t.status === "active") {
+      upd.difficulty = t.difficulty;
+      upd.nextDue = addDays(t.lastDone, DIFFS[t.difficulty].days[Math.min(t.stage || 0, 2)]);
+    }
+    await fs.updateItem(SET, t.id, upd);
+    setEdit(null);
   };
 
   const addScore = async () => {
@@ -126,64 +161,114 @@ export default function JEE({ userId, fabTrigger }) {
     setShowAddScore(false);
   };
 
-  const saveTopic = async () => {
-    // If lastRevised changed, increment revisionCount
-    const original = currentTopics.find(t => t.id === editTopic.id);
-    let updated = { ...editTopic };
-    if (original && original.lastRevised !== editTopic.lastRevised) {
-      updated.revisionCount = (editTopic.revisionCount || 0) + 1;
-    }
-    await fs.updateItem(`jee_topics_${activeSubject}`, editTopic.id, updated);
-    setEditTopic(null);
+  // ---- Row ----
+  const Row = ({ t, kind }) => {
+    const s = SUBJECTS[t.subject] || subj;
+    const late = kind === "revise" ? daysBetween(t.nextDue, today) : 0;
+    const btn = { fontSize: 11, padding: "4px 10px" };
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px", borderBottom: "1px solid var(--border)", flexWrap: "wrap" }}>
+        <div style={{ width: 8, height: 8, borderRadius: "50%", background: s.accent, flexShrink: 0 }} />
+        <div style={{ flex: 1, minWidth: 140, cursor: "pointer" }} onClick={() => setEdit({ ...t })}>
+          <div style={{ fontFamily: "DM Mono", fontSize: 13, color: "var(--text-primary)" }}>{t.name}</div>
+          <div style={{ fontFamily: "DM Mono", fontSize: 11, color: "var(--text-secondary)", marginTop: 2 }}>
+            {t.subject}{t.chapter ? ` / ${t.chapter}` : ""}
+            {kind === "backlog" && ` / taught ${nice(t.taughtDate)}`}
+            {kind === "ongoing" && ` / started ${nice(t.startedDate)}`}
+            {kind === "revise" && ` / ${late > 0 ? `${late}d overdue` : "due today"}`}
+          </div>
+        </div>
+        {kind === "backlog" && <Tag label={`${ageOf(t, today)} backlog`} color={AGE_COLOR[ageOf(t, today)]} />}
+        {kind === "ongoing" && <Tag label="ongoing" color="#f59e0b" />}
+        {kind === "revise" && <Tag label={DIFFS[t.difficulty].label} color={DIFFS[t.difficulty].color} />}
+        <div style={{ display: "flex", gap: 6 }}>
+          {kind === "backlog" && <button className="btn btn-ghost" style={btn} onClick={() => startBacklog(t)}>Start</button>}
+          {kind === "backlog" && <button className="btn btn-primary" style={{ ...btn, background: s.accent }} onClick={() => setPick({ t, kind: "clear" })}>Clear</button>}
+          {kind === "ongoing" && <button className="btn btn-primary" style={{ ...btn, background: s.accent }} onClick={() => setPick({ t, kind: "finish" })}>Finish</button>}
+          {kind === "revise" && <button className="btn btn-primary" style={{ ...btn, background: s.accent }} onClick={() => setPick({ t, kind: "revise" })}>Revise</button>}
+        </div>
+      </div>
+    );
   };
+  const kindOf = t => (t.status === "ongoing" ? "ongoing" : "backlog");
+  const Empty = ({ text }) => <div style={{ padding: "16px", fontFamily: "DM Mono", fontSize: 12, color: "var(--text-muted)" }}>{text}</div>;
+  const Label = ({ children }) => <div style={{ padding: "10px 16px 6px", fontFamily: "Syne", fontSize: 11, fontWeight: 700, color: "var(--text-secondary)", letterSpacing: "0.04em" }}>{children}</div>;
 
-  const deleteTopic = async (id) => {
-    await fs.deleteItem(`jee_topics_${activeSubject}`, id);
-    setEditTopic(null);
-  };
-
-  const deleteScore = async (id) => {
-    await fs.deleteItem(`jee_scores_${activeSubject}`, id);
-  };
-
-  const chartData = currentScores.map((s, i) => ({
-    name: s.exam,
-    marks: s.marks,
-    index: i + 1
-  }));
+  const tableItems = items.filter(t => t.subject === activeSubject).sort((a, b) => {
+    const o = { ongoing: 0, backlog: 1, active: 2 };
+    return o[a.status] - o[b.status] || (a.nextDue || "").localeCompare(b.nextDue || "");
+  });
+  const chartData = (scores[activeSubject] || []).map(s => ({ name: s.exam, marks: s.marks }));
+  const currentScores = scores[activeSubject] || [];
+  const recTotal = recLearn.length + recRev.length;
 
   return (
-    <div className={subj.theme} style={{ paddingBottom: 100, transition: 'all 0.3s ease' }}>
-      {/* Header */}
-      <div style={{ padding: '28px 16px 0', marginBottom: 24 }}>
-        <p style={{ color: 'var(--text-secondary)', fontSize: 12, fontFamily: 'DM Mono', marginBottom: 4 }}>jee prep</p>
-        <h1 style={{ fontFamily: 'Syne', fontSize: 28, fontWeight: 800, letterSpacing: '-0.02em' }}>
-          JEE Tracker
-        </h1>
+    <div className={subj.theme} style={{ paddingBottom: 100, transition: "all 0.3s ease" }}>
+      <div style={{ padding: "28px 16px 0", marginBottom: 24 }}>
+        <p style={{ color: "var(--text-secondary)", fontSize: 12, fontFamily: "DM Mono", marginBottom: 4 }}>jee prep</p>
+        <h1 style={{ fontFamily: "Syne", fontSize: 28, fontWeight: 800, letterSpacing: "-0.02em" }}>JEE Tracker</h1>
+      </div>
+
+      {/* Today */}
+      <div style={{ padding: "0 16px", marginBottom: 24 }}>
+        <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+          <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+            <div>
+              <h2 style={{ fontFamily: "Syne", fontSize: 15, fontWeight: 700 }}>{DAYS[d]}</h2>
+              <p style={{ fontFamily: "DM Mono", fontSize: 11, color: "var(--text-secondary)", marginTop: 2 }}>
+                {LEARN_SLOTS[d] ? `${d === 5 ? "2 backlogs" : d === 6 ? "up to 1 module" : "half a module"}` : "no new learning"}
+                {" / "}{REV_SLOTS[d] ? `${REV_SLOTS[d]} revisions` : "no revisions"} recommended
+              </p>
+            </div>
+            <button className="btn btn-primary" style={{ fontSize: 11, padding: "4px 10px" }} onClick={() => setLog(blankLog())}>+ Log</button>
+          </div>
+
+          <Label>LEARN</Label>
+          {recLearn.length === 0 && <Empty text={LEARN_SLOTS[d] ? "Nothing queued. Log a backlog or a new topic." : "No new learning planned today."} />}
+          {recLearn.map(t => <Row key={t.id} t={t} kind={kindOf(t)} />)}
+
+          <Label>REVISE</Label>
+          {recRev.length === 0 && <Empty text={REV_SLOTS[d] ? "Nothing due. You're clear." : "No revision day today."} />}
+          {recRev.map(t => <Row key={t.id} t={t} kind="revise" />)}
+
+          <button onClick={() => setShowAll(v => !v)} style={{
+            width: "100%", background: "transparent", border: "none", borderTop: "1px solid var(--border)",
+            color: "var(--text-secondary)", fontFamily: "Syne", fontSize: 12, fontWeight: 600, padding: 12, cursor: "pointer"
+          }}>
+            {showAll ? "Hide the rest" : `Show everything else (${restLearn.length + restRev.length + upcoming.length})`}
+          </button>
+
+          {showAll && (
+            <div>
+              {restLearn.length > 0 && <Label>MORE TO LEARN</Label>}
+              {restLearn.map(t => <Row key={t.id} t={t} kind={kindOf(t)} />)}
+              {restRev.length > 0 && <Label>MORE DUE</Label>}
+              {restRev.map(t => <Row key={t.id} t={t} kind="revise" />)}
+              {upcoming.length > 0 && <Label>COMING UP (revise early if you want)</Label>}
+              {upcoming.slice(0, 15).map(t => (
+                <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", borderBottom: "1px solid var(--border)" }}>
+                  <div style={{ flex: 1, fontFamily: "DM Mono", fontSize: 12 }}>{t.name} <span style={{ color: "var(--text-secondary)" }}>/ {nice(t.nextDue)}</span></div>
+                  <button className="btn btn-ghost" style={{ fontSize: 11, padding: "4px 10px" }} onClick={() => setPick({ t, kind: "revise" })}>Revise</button>
+                </div>
+              ))}
+            </div>
+          )}
+          {recTotal === 0 && !showAll && learnQ.length + revQ.length === 0 && <Empty text="All caught up." />}
+        </div>
       </div>
 
       {/* Subject Switcher */}
-      <div style={{ padding: '0 16px', marginBottom: 24 }}>
-        <div style={{
-          display: 'flex', gap: 8, padding: 6,
-          background: 'var(--bg-secondary)', borderRadius: 14,
-          border: '1px solid var(--border)'
-        }}>
+      <div style={{ padding: "0 16px", marginBottom: 24 }}>
+        <div style={{ display: "flex", gap: 8, padding: 6, background: "var(--bg-secondary)", borderRadius: 14, border: "1px solid var(--border)" }}>
           {Object.entries(SUBJECTS).map(([key, s]) => (
-            <button
-              key={key}
-              onClick={() => setActiveSubject(key)}
-              style={{
-                flex: 1, padding: '10px 8px', borderRadius: 10,
-                border: 'none', cursor: 'pointer',
-                fontFamily: 'Syne', fontWeight: 700, fontSize: 13,
-                transition: 'all 0.25s ease',
-                background: activeSubject === key ? s.bg : 'transparent',
-                color: activeSubject === key ? s.accent : 'var(--text-secondary)',
-                boxShadow: activeSubject === key ? `0 0 0 1px ${s.border}, 0 4px 12px rgba(0,0,0,0.2)` : 'none',
-                display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2
-              }}
-            >
+            <button key={key} onClick={() => setActiveSubject(key)} style={{
+              flex: 1, padding: "10px 8px", borderRadius: 10, border: "none", cursor: "pointer",
+              fontFamily: "Syne", fontWeight: 700, fontSize: 13, transition: "all 0.25s ease",
+              background: activeSubject === key ? s.bg : "transparent",
+              color: activeSubject === key ? s.accent : "var(--text-secondary)",
+              boxShadow: activeSubject === key ? `0 0 0 1px ${s.border}, 0 4px 12px rgba(0,0,0,0.2)` : "none",
+              display: "flex", flexDirection: "column", alignItems: "center", gap: 2
+            }}>
               <span style={{ fontSize: 18 }}>{s.icon}</span>
               <span style={{ fontSize: 11 }}>{s.label}</span>
             </button>
@@ -191,135 +276,82 @@ export default function JEE({ userId, fabTrigger }) {
         </div>
       </div>
 
-      {/* Topic Table */}
-      <div style={{ padding: '0 16px', marginBottom: 24 }}>
-        <div className="card" style={{ padding: 0, overflow: 'hidden', borderColor: subj.border }}>
-          <div style={{
-            padding: '14px 16px', borderBottom: '1px solid var(--border)',
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between'
-          }}>
-            <h2 style={{ fontFamily: 'Syne', fontSize: 15, fontWeight: 700, color: subj.accent }}>
-              {activeSubject} Topics
-            </h2>
-            <button className="btn btn-primary"
-              style={{ fontSize: 11, padding: '4px 10px', background: subj.accent }}
-              onClick={() => setShowAddTopic(true)}>
-              + Add Topic
-            </button>
+      {/* Topic table */}
+      <div style={{ padding: "0 16px", marginBottom: 24 }}>
+        <div className="card" style={{ padding: 0, overflow: "hidden", borderColor: subj.border }}>
+          <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <h2 style={{ fontFamily: "Syne", fontSize: 15, fontWeight: 700, color: subj.accent }}>{activeSubject} Topics</h2>
+            <span style={{ fontFamily: "DM Mono", fontSize: 11, color: "var(--text-secondary)" }}>{tableItems.length} total</span>
           </div>
-
-          <div style={{ overflowX: 'auto' }}>
+          <div style={{ overflowX: "auto" }}>
             <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Topic</th>
-                  <th>Status</th>
-                  <th>Difficulty</th>
-                  <th>Weightage</th>
-                  <th>Last Revised</th>
-                  <th>Revisions</th>
-                  <th>Notes</th>
-                </tr>
-              </thead>
+              <thead><tr><th>Topic</th><th>Level</th><th>Next</th><th>Revs</th></tr></thead>
               <tbody>
-                {currentTopics.length === 0 && (
-                  <tr>
-                    <td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: 32 }}>
-                      No topics yet. Add your first one!
-                    </td>
-                  </tr>
+                {tableItems.length === 0 && (
+                  <tr><td colSpan={4} style={{ textAlign: "center", color: "var(--text-muted)", padding: 32 }}>No topics yet. Log your first one.</td></tr>
                 )}
-                {currentTopics.map(topic => (
-                  <tr key={topic.id} onClick={() => setEditTopic({ ...topic })} style={{ cursor: 'pointer' }}>
-                    <td style={{ fontFamily: 'DM Mono', fontSize: 12, fontWeight: 500, color: 'var(--text-primary)', minWidth: 140 }}>
-                      {topic.name}
-                    </td>
-                    <td><Badge value={topic.status} map={STATUS_COLORS} /></td>
-                    <td><Badge value={topic.difficulty} map={LEVEL_COLORS} /></td>
-                    <td><Badge value={topic.weightage} map={LEVEL_COLORS} /></td>
-                    <td style={{ fontFamily: 'DM Mono', fontSize: 11, color: 'var(--text-secondary)' }}>
-                      {topic.lastRevised || "—"}
-                    </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <span style={{
-                        background: `${subj.accent}20`, color: subj.accent,
-                        padding: '2px 8px', borderRadius: 99,
-                        fontSize: 11, fontFamily: 'Syne', fontWeight: 700
-                      }}>
-                        {topic.revisionCount || 0}×
-                      </span>
-                    </td>
-                    <td style={{ fontFamily: 'DM Mono', fontSize: 11, color: 'var(--text-secondary)', maxWidth: 160 }}>
-                      <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {topic.notes || "—"}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                {tableItems.map(t => {
+                  const over = t.status === "active" && t.nextDue <= today;
+                  return (
+                    <tr key={t.id} onClick={() => setEdit({ ...t })} style={{ cursor: "pointer" }}>
+                      <td style={{ fontFamily: "DM Mono", fontWeight: 500, minWidth: 130 }}>
+                        {t.name}
+                        {t.chapter && <div style={{ fontSize: 10, color: "var(--text-secondary)" }}>{t.chapter}</div>}
+                      </td>
+                      <td>
+                        {t.status === "active" && <Tag label={DIFFS[t.difficulty].label} color={DIFFS[t.difficulty].color} />}
+                        {t.status === "ongoing" && <Tag label="ongoing" color="#f59e0b" />}
+                        {t.status === "backlog" && <Tag label={`${ageOf(t, today)} backlog`} color={AGE_COLOR[ageOf(t, today)]} />}
+                      </td>
+                      <td style={{ fontFamily: "DM Mono", fontSize: 11, color: over ? "#ef4444" : "var(--text-secondary)", whiteSpace: "nowrap" }}>
+                        {t.status === "active" ? nice(t.nextDue) : "-"}
+                      </td>
+                      <td style={{ textAlign: "center" }}>
+                        <span style={{ background: `${subj.accent}20`, color: subj.accent, padding: "2px 8px", borderRadius: 99, fontSize: 11, fontFamily: "Syne", fontWeight: 700 }}>
+                          {(t.history || []).length}×
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         </div>
       </div>
 
-      {/* Progress Chart */}
-      <div style={{ padding: '0 16px' }}>
+      {/* Exam progress */}
+      <div style={{ padding: "0 16px" }}>
         <div className="card" style={{ padding: 20, borderColor: subj.border }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
             <div>
-              <h2 style={{ fontFamily: 'Syne', fontSize: 15, fontWeight: 700, color: subj.accent, marginBottom: 2 }}>
-                Exam Progress
-              </h2>
-              <p style={{ fontFamily: 'DM Mono', fontSize: 11, color: 'var(--text-secondary)' }}>
-                Out of 240 marks
-              </p>
+              <h2 style={{ fontFamily: "Syne", fontSize: 15, fontWeight: 700, color: subj.accent, marginBottom: 2 }}>Exam Progress</h2>
+              <p style={{ fontFamily: "DM Mono", fontSize: 11, color: "var(--text-secondary)" }}>Out of 240 marks</p>
             </div>
-            <button className="btn btn-primary"
-              style={{ fontSize: 11, padding: '4px 10px', background: subj.accent }}
-              onClick={() => setShowAddScore(true)}>
-              + Add Score
-            </button>
+            <button className="btn btn-primary" style={{ fontSize: 11, padding: "4px 10px", background: subj.accent }} onClick={() => setShowAddScore(true)}>+ Add Score</button>
           </div>
-
           {chartData.length === 0 ? (
-            <div style={{
-              height: 160, display: 'flex', alignItems: 'center', justifyContent: 'center',
-              color: 'var(--text-muted)', fontFamily: 'DM Mono', fontSize: 12,
-              border: '1px dashed var(--border)', borderRadius: 8
-            }}>
+            <div style={{ height: 160, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", fontFamily: "DM Mono", fontSize: 12, border: "1px dashed var(--border)", borderRadius: 8 }}>
               No scores yet. Add your first exam result!
             </div>
           ) : (
             <ResponsiveContainer width="100%" height={200}>
               <LineChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                <XAxis dataKey="name" tick={{ fill: 'var(--text-secondary)', fontSize: 10, fontFamily: 'DM Mono' }} />
-                <YAxis domain={[0, 240]} tick={{ fill: 'var(--text-secondary)', fontSize: 10, fontFamily: 'DM Mono' }} />
+                <XAxis dataKey="name" tick={{ fill: "var(--text-secondary)", fontSize: 10, fontFamily: "DM Mono" }} />
+                <YAxis domain={[0, 240]} tick={{ fill: "var(--text-secondary)", fontSize: 10, fontFamily: "DM Mono" }} />
                 <Tooltip content={<CustomTooltip accent={subj.accent} />} />
-                <Line
-                  type="monotone" dataKey="marks"
-                  stroke={subj.accent} strokeWidth={2.5}
-                  dot={{ fill: subj.accent, strokeWidth: 0, r: 4 }}
-                  activeDot={{ r: 6, fill: subj.accent }}
-                />
+                <Line type="monotone" dataKey="marks" stroke={subj.accent} strokeWidth={2.5} dot={{ fill: subj.accent, strokeWidth: 0, r: 4 }} activeDot={{ r: 6, fill: subj.accent }} />
               </LineChart>
             </ResponsiveContainer>
           )}
-
-          {/* Score list */}
           {currentScores.length > 0 && (
-            <div style={{ marginTop: 16, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            <div style={{ marginTop: 16, display: "flex", flexWrap: "wrap", gap: 8 }}>
               {currentScores.map(s => (
-                <div key={s.id} style={{
-                  background: `${subj.accent}10`, border: `1px solid ${subj.border}`,
-                  borderRadius: 8, padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 8
-                }}>
-                  <span style={{ fontFamily: 'DM Mono', fontSize: 11, color: 'var(--text-secondary)' }}>{s.exam}</span>
-                  <span style={{ fontFamily: 'Syne', fontWeight: 700, fontSize: 13, color: subj.accent }}>{s.marks}</span>
-                  <button onClick={() => deleteScore(s.id)} style={{
-                    background: 'none', border: 'none', color: 'var(--text-muted)',
-                    cursor: 'pointer', fontSize: 12, padding: 0
-                  }}>×</button>
+                <div key={s.id} style={{ background: `${subj.accent}10`, border: `1px solid ${subj.border}`, borderRadius: 8, padding: "6px 12px", display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontFamily: "DM Mono", fontSize: 11, color: "var(--text-secondary)" }}>{s.exam}</span>
+                  <span style={{ fontFamily: "Syne", fontWeight: 700, fontSize: 13, color: subj.accent }}>{s.marks}</span>
+                  <button onClick={() => fs.deleteItem(`jee_scores_${activeSubject}`, s.id)} style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 12, padding: 0 }}>×</button>
                 </div>
               ))}
             </div>
@@ -327,149 +359,117 @@ export default function JEE({ userId, fabTrigger }) {
         </div>
       </div>
 
-      {/* Add Topic Modal */}
-      {showAddTopic && (
-        <div className="modal-overlay" onClick={() => setShowAddTopic(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <h3 style={{ fontFamily: 'Syne', fontWeight: 700, fontSize: 18, marginBottom: 20, color: subj.accent }}>
-              Add {activeSubject} Topic
-            </h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <div>
-                <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>TOPIC NAME</label>
-                <input className="input" placeholder="e.g. Integration" value={newTopic.name}
-                  onChange={e => setNewTopic(p => ({ ...p, name: e.target.value }))} autoFocus />
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                <div>
-                  <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>STATUS</label>
-                  <select className="input" value={newTopic.status} onChange={e => setNewTopic(p => ({ ...p, status: e.target.value }))}>
-                    {STATUS_OPTIONS.map(o => <option key={o}>{o}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>DIFFICULTY</label>
-                  <select className="input" value={newTopic.difficulty} onChange={e => setNewTopic(p => ({ ...p, difficulty: e.target.value }))}>
-                    {LEVEL_OPTIONS.map(o => <option key={o}>{o}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>WEIGHTAGE</label>
-                  <select className="input" value={newTopic.weightage} onChange={e => setNewTopic(p => ({ ...p, weightage: e.target.value }))}>
-                    {LEVEL_OPTIONS.map(o => <option key={o}>{o}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>LAST REVISED</label>
-                  <input className="input" type="date" value={newTopic.lastRevised}
-                    onChange={e => setNewTopic(p => ({ ...p, lastRevised: e.target.value }))} />
-                </div>
-              </div>
-              <div>
-                <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>NOTES</label>
-                <input className="input" placeholder="Quick note..." value={newTopic.notes}
-                  onChange={e => setNewTopic(p => ({ ...p, notes: e.target.value }))} />
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 20 }}>
-              <button className="btn btn-ghost" onClick={() => setShowAddTopic(false)}>Cancel</button>
-              <button className="btn btn-primary" style={{ background: subj.accent }} onClick={addTopic}>Add Topic</button>
-            </div>
+      {/* Log modal */}
+      {log && (
+        <Modal title="Log" accent={subj.accent} onClose={() => setLog(null)}>
+          <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
+            {[["topic", "Topic"], ["backlog", "Backlog"]].map(([m, l]) => (
+              <button key={m} className="btn" onClick={() => setLog(p => ({ ...p, mode: m }))} style={{
+                flex: 1, background: log.mode === m ? subj.accent : "transparent", color: log.mode === m ? "white" : "var(--text-secondary)", border: "1px solid var(--border)"
+              }}>{l}</button>
+            ))}
           </div>
-        </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <F l="TOPIC NAME"><input className="input" placeholder="e.g. Integration" value={log.name} onChange={e => setLog(p => ({ ...p, name: e.target.value }))} autoFocus /></F>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <F l="SUBJECT">
+                <select className="input" value={log.subject} onChange={e => setLog(p => ({ ...p, subject: e.target.value }))}>
+                  {Object.keys(SUBJECTS).map(s => <option key={s}>{s}</option>)}
+                </select>
+              </F>
+              <F l="CHAPTER"><input className="input" placeholder="optional" value={log.chapter} onChange={e => setLog(p => ({ ...p, chapter: e.target.value }))} /></F>
+            </div>
+            {log.mode === "topic" && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                <F l="PROGRESS">
+                  <select className="input" value={log.state} onChange={e => setLog(p => ({ ...p, state: e.target.value }))}>
+                    <option value="done">Done</option>
+                    <option value="ongoing">Ongoing</option>
+                  </select>
+                </F>
+                {log.state === "done" && (
+                  <F l="DIFFICULTY">
+                    <select className="input" value={log.difficulty} onChange={e => setLog(p => ({ ...p, difficulty: e.target.value }))}>
+                      {Object.entries(DIFFS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                    </select>
+                  </F>
+                )}
+              </div>
+            )}
+            <F l={log.mode === "backlog" ? "TAUGHT IN CLASS ON" : "DATE STUDIED"}>
+              <input className="input" type="date" value={log.date} max={today} onChange={e => setLog(p => ({ ...p, date: e.target.value }))} />
+            </F>
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 20 }}>
+            <button className="btn btn-ghost" onClick={() => setLog(null)}>Cancel</button>
+            <button className="btn btn-primary" style={{ background: subj.accent }} onClick={submitLog}>{log.mode === "backlog" ? "Log backlog" : "Log topic"}</button>
+          </div>
+        </Modal>
       )}
 
-      {/* Add Score Modal */}
+      {/* Difficulty picker */}
+      {pick && (
+        <Modal title={pick.kind === "revise" ? "How did it feel?" : "Set difficulty"} accent={subj.accent} onClose={() => setPick(null)}>
+          <p style={{ fontFamily: "DM Mono", fontSize: 12, color: "var(--text-secondary)", marginBottom: 16 }}>
+            {pick.t.name}. {pick.kind === "revise" ? "Pick the level it is at now." : "Day 1 of revision starts today."}
+          </p>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            {Object.entries(DIFFS).map(([k, v]) => (
+              <button key={k} className="btn" onClick={() => applyPick(k)} style={{
+                background: `${v.color}18`, color: v.color, border: `1px solid ${v.color}55`, padding: "14px 8px",
+                outline: pick.t.difficulty === k ? `2px solid ${v.color}` : "none"
+              }}>{v.label}</button>
+            ))}
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
+            <button className="btn btn-ghost" onClick={() => setPick(null)}>Cancel</button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Edit modal */}
+      {edit && (
+        <Modal title="Edit Topic" accent={subj.accent} onClose={() => setEdit(null)}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <F l="TOPIC NAME"><input className="input" value={edit.name} onChange={e => setEdit(p => ({ ...p, name: e.target.value }))} /></F>
+            <F l="CHAPTER"><input className="input" value={edit.chapter || ""} onChange={e => setEdit(p => ({ ...p, chapter: e.target.value }))} /></F>
+            {edit.status === "active" && (
+              <F l="DIFFICULTY">
+                <select className="input" value={edit.difficulty} onChange={e => setEdit(p => ({ ...p, difficulty: e.target.value }))}>
+                  {Object.entries(DIFFS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                </select>
+              </F>
+            )}
+            <F l="NOTES / LINK"><input className="input" placeholder="Quick note or Drive link" value={edit.notes || ""} onChange={e => setEdit(p => ({ ...p, notes: e.target.value }))} /></F>
+            {edit.status === "active" && (
+              <div style={{ background: "var(--bg-secondary)", borderRadius: 8, padding: "8px 12px", fontFamily: "DM Mono", fontSize: 11, color: "var(--text-secondary)" }}>
+                Last done {nice(edit.lastDone)}, next {nice(edit.nextDue)}, revised <span style={{ color: subj.accent, fontWeight: 700 }}>{(edit.history || []).length}×</span>
+              </div>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "space-between", marginTop: 20 }}>
+            <button className="btn" style={{ background: "rgba(239,68,68,0.1)", color: "#ef4444", border: "1px solid rgba(239,68,68,0.2)" }}
+              onClick={async () => { await fs.deleteItem(SET, edit.id); setEdit(null); }}>Delete</button>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn btn-ghost" onClick={() => setEdit(null)}>Cancel</button>
+              <button className="btn btn-primary" style={{ background: subj.accent }} onClick={saveEdit}>Save</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Add score modal */}
       {showAddScore && (
-        <div className="modal-overlay" onClick={() => setShowAddScore(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <h3 style={{ fontFamily: 'Syne', fontWeight: 700, fontSize: 18, marginBottom: 20, color: subj.accent }}>
-              Add Exam Score
-            </h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <div>
-                <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>EXAM NAME</label>
-                <input className="input" placeholder="e.g. Allen Mock 3" value={newScore.exam}
-                  onChange={e => setNewScore(p => ({ ...p, exam: e.target.value }))} autoFocus />
-              </div>
-              <div>
-                <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>MARKS (out of 240)</label>
-                <input className="input" type="number" min="0" max="240" placeholder="e.g. 156"
-                  value={newScore.marks} onChange={e => setNewScore(p => ({ ...p, marks: e.target.value }))} />
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 20 }}>
-              <button className="btn btn-ghost" onClick={() => setShowAddScore(false)}>Cancel</button>
-              <button className="btn btn-primary" style={{ background: subj.accent }} onClick={addScore}>Add Score</button>
-            </div>
+        <Modal title="Add Exam Score" accent={subj.accent} onClose={() => setShowAddScore(false)}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <F l="EXAM NAME"><input className="input" placeholder="e.g. Allen Mock 3" value={newScore.exam} onChange={e => setNewScore(p => ({ ...p, exam: e.target.value }))} autoFocus /></F>
+            <F l="MARKS (out of 240)"><input className="input" type="number" min="0" max="240" placeholder="e.g. 156" value={newScore.marks} onChange={e => setNewScore(p => ({ ...p, marks: e.target.value }))} /></F>
           </div>
-        </div>
-      )}
-
-      {/* Edit Topic Modal */}
-      {editTopic && (
-        <div className="modal-overlay" onClick={() => setEditTopic(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <h3 style={{ fontFamily: 'Syne', fontWeight: 700, fontSize: 18, marginBottom: 20, color: subj.accent }}>
-              Edit Topic
-            </h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <div>
-                <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>TOPIC NAME</label>
-                <input className="input" value={editTopic.name}
-                  onChange={e => setEditTopic(p => ({ ...p, name: e.target.value }))} />
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                <div>
-                  <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>STATUS</label>
-                  <select className="input" value={editTopic.status} onChange={e => setEditTopic(p => ({ ...p, status: e.target.value }))}>
-                    {STATUS_OPTIONS.map(o => <option key={o}>{o}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>DIFFICULTY</label>
-                  <select className="input" value={editTopic.difficulty} onChange={e => setEditTopic(p => ({ ...p, difficulty: e.target.value }))}>
-                    {LEVEL_OPTIONS.map(o => <option key={o}>{o}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>WEIGHTAGE</label>
-                  <select className="input" value={editTopic.weightage} onChange={e => setEditTopic(p => ({ ...p, weightage: e.target.value }))}>
-                    {LEVEL_OPTIONS.map(o => <option key={o}>{o}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>LAST REVISED</label>
-                  <input className="input" type="date" value={editTopic.lastRevised}
-                    onChange={e => setEditTopic(p => ({ ...p, lastRevised: e.target.value }))} />
-                </div>
-              </div>
-              <div>
-                <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>NOTES</label>
-                <input className="input" placeholder="Quick note..." value={editTopic.notes || ""}
-                  onChange={e => setEditTopic(p => ({ ...p, notes: e.target.value }))} />
-              </div>
-              <div style={{
-                background: 'var(--bg-secondary)', borderRadius: 8, padding: '8px 12px',
-                fontFamily: 'DM Mono', fontSize: 11, color: 'var(--text-secondary)'
-              }}>
-                Revision count: <span style={{ color: subj.accent, fontWeight: 700 }}>{editTopic.revisionCount || 0}×</span>
-                <span style={{ marginLeft: 8 }}>(auto-increments when you update Last Revised)</span>
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between', marginTop: 20 }}>
-              <button
-                className="btn"
-                style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.2)' }}
-                onClick={() => deleteTopic(editTopic.id)}
-              >Delete</button>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button className="btn btn-ghost" onClick={() => setEditTopic(null)}>Cancel</button>
-                <button className="btn btn-primary" style={{ background: subj.accent }} onClick={saveTopic}>Save</button>
-              </div>
-            </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 20 }}>
+            <button className="btn btn-ghost" onClick={() => setShowAddScore(false)}>Cancel</button>
+            <button className="btn btn-primary" style={{ background: subj.accent }} onClick={addScore}>Add Score</button>
           </div>
-        </div>
+        </Modal>
       )}
     </div>
   );
