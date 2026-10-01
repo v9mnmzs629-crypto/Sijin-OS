@@ -1,23 +1,40 @@
-import { useState, useEffect } from "react";
 import {
   doc, setDoc, getDoc, onSnapshot, collection,
-  addDoc, deleteDoc, updateDoc, query, where, orderBy
+  addDoc, deleteDoc, updateDoc
 } from "firebase/firestore";
 import { db } from "../firebase/config";
 
 export function useFirestore(userId) {
-  // Generic doc setter
+  // Converts "habits/weeks/2026-W05-25" -> collection="habits", docId="weeks_2026-W05-25"
+  // Ensures we always have even segments: users/{uid}/habits/{docId}
+  const resolvePath = (path) => {
+    const parts = path.split("/");
+    if (parts.length === 1) {
+      // e.g. "config" -> collection="appData", doc="config"
+      return { col: "appData", docId: parts[0] };
+    } else {
+      // e.g. "habits/config" -> col="habits", docId="config"
+      // e.g. "habits/weeks/2026-W05-25" -> col="habits", docId="weeks_2026-W05-25"
+      const col = parts[0];
+      const docId = parts.slice(1).join("_");
+      return { col, docId };
+    }
+  };
+
   const setData = async (path, data) => {
-    await setDoc(doc(db, "users", userId, ...path.split("/")), data, { merge: true });
+    const { col, docId } = resolvePath(path);
+    await setDoc(doc(db, "users", userId, col, docId), data, { merge: true });
   };
 
   const getData = async (path) => {
-    const snap = await getDoc(doc(db, "users", userId, ...path.split("/")));
+    const { col, docId } = resolvePath(path);
+    const snap = await getDoc(doc(db, "users", userId, col, docId));
     return snap.exists() ? snap.data() : null;
   };
 
   const watchData = (path, callback) => {
-    return onSnapshot(doc(db, "users", userId, ...path.split("/")), (snap) => {
+    const { col, docId } = resolvePath(path);
+    return onSnapshot(doc(db, "users", userId, col, docId), (snap) => {
       callback(snap.exists() ? snap.data() : null);
     });
   };
