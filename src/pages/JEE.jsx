@@ -30,8 +30,10 @@ const daysBetween = (a, b) => Math.round((ms(b) - ms(a)) / 864e5);
 const dow = s => new Date(ms(s)).getUTCDay();
 const nice = s => s ? new Date(ms(s)).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" }) : "-";
 
+const behindOf = t => Math.max(0, (t.taught || 0) - (t.studied || 0));
+const oldestUnstudied = t => (t.taughtDates || [])[t.studied || 0];
 const ageOf = (t, today) => {
-  const d = daysBetween(t.taughtDate || today, today);
+  const d = daysBetween(t.taughtDate || oldestUnstudied(t) || today, today);
   return d < RECENT_DAYS ? "recent" : d < MEDIUM_DAYS ? "medium" : "old";
 };
 const AGE_RANK = { recent: 0, medium: 1, old: 2 };
@@ -75,7 +77,12 @@ const CustomTooltip = ({ active, payload, label, accent }) => {
 };
 
 export default function JEE({ userId, fabTrigger }) {
-  const fs = useFirestore(userId);
+  const raw = useFirestore(userId);
+  const guard = f => async (...a) => {
+    try { return await f(...a); }
+    catch (e) { alert("Could not save: " + (e.code || e.message)); throw e; }
+  };
+  const fs = { ...raw, addItem: guard(raw.addItem), updateItem: guard(raw.updateItem), deleteItem: guard(raw.deleteItem) };
   const today = todayStr();
   const [activeSubject, setActiveSubject] = useState("Maths");
   const [items, setItems] = useState([]);
@@ -88,7 +95,7 @@ export default function JEE({ userId, fabTrigger }) {
   const [newScore, setNewScore] = useState({ exam: "", marks: "" });
 
   const subj = SUBJECTS[activeSubject];
-  const blankLog = (mode = "topic") => ({ mode, name: "", subject: activeSubject, chapter: "", state: "done", difficulty: "medium", date: today });
+  const blankLog = (mode = "module") => ({ mode, name: "", subject: activeSubject, chapter: "", state: "done", difficulty: "medium", date: today, total: 6, taught: 1, studied: 0 });
 
   useEffect(() => { if (fabTrigger > 0) setLog(blankLog()); }, [fabTrigger]);
 
@@ -105,8 +112,16 @@ export default function JEE({ userId, fabTrigger }) {
   // ---- Queues ----
   const ongoing = items.filter(t => t.status === "ongoing").sort((a, b) => (a.startedDate || "").localeCompare(b.startedDate || ""));
   const backlogs = items.filter(t => t.status === "backlog")
-    .sort((a, b) => AGE_RANK[ageOf(a, today)] - AGE_RANK[ageOf(b, today)] || (a.taughtDate || "").localeCompare(b.taughtDate || ""));
-  const learnQ = [...ongoing, ...backlogs];
+    .sort((a, b) => (b.taughtDate || "").localeCompare(a.taughtDate || ""));
+  const openAll = items.filter(t => t.status === "open");
+  const openBehind = openAll.filter(t => behindOf(t) > 0).sort((a, b) => (oldestUnstudied(a) || "9").localeCompare(oldestUnstudied(b) || "9"));
+  const openOk = openAll.filter(t => behindOf(t) === 0);
+  const learnQ = [...openBehind, ...ongoing, ...backlogs];
+  const statusOf = k => {
+    const b = openAll.filter(t => t.subject === k).reduce((n, t) => n + behindOf(t), 0);
+    const bl = items.filter(t => t.subject === k && t.status === "backlog").length;
+    return (b ? `${b} behind` : "up to date") + (bl ? ` +${bl} backlog` : "");
+  };
   const revQ = items.filter(t => t.status === "active" && t.nextDue && t.nextDue <= today)
     .sort((a, b) => RANK[b.difficulty] - RANK[a.difficulty] || a.nextDue.localeCompare(b.nextDue));
   const d = dow(today);
@@ -120,7 +135,10 @@ export default function JEE({ userId, fabTrigger }) {
   const submitLog = async () => {
     if (!log.name.trim()) return;
     const base = { name: log.name.trim(), subject: log.subject, chapter: log.chapter.trim(), notes: "" };
-    if (log.mode === "backlog") await fs.addItem(SET, { ...base, status: "backlog", taughtDate: log.date });
+    if (log.mode === "module") {
+      const tg = Math.max(0, Number(log.taught) || 0), st = Math.min(tg, Math.max(0, Number(log.studied) || 0));
+      await fs.addItem(SET, { ...base, status: "open", total: Math.max(1, Number(log.total) || 6), taught: tg, studied: st, taughtDates: Array(tg).fill(log.date) });
+    } else if (log.mode === "backlog") await fs.addItem(SET, { ...base, status: "backlog", taughtDate: log.date });
     else if (log.state === "ongoing") await fs.addItem(SET, { ...base, status: "ongoing", startedDate: log.date });
     else await fs.addItem(SET, { ...base, status: "active", difficulty: log.difficulty, stage: 0, lastDone: log.date, nextDue: addDays(log.date, DIFFS[log.difficulty].days[0]), history: [] });
     setLog(null);
@@ -142,10 +160,21 @@ export default function JEE({ userId, fabTrigger }) {
   };
 
   const startBacklog = t => fs.updateItem(SET, t.id, { status: "ongoing", startedDate: today });
+  const addTaught = t => fs.updateItem(SET, t.id, { taught: (t.taught || 0) + 1, taughtDates: [...(t.taughtDates || []), today] });
+  const addStudied = t => {
+    const st = (t.studied || 0) + 1, upd = { studied: st };
+    if (st > (t.taught || 0)) { upd.taught = st; upd.taughtDates = [...(t.taughtDates || []), today]; }
+    return fs.updateItem(SET, t.id, upd);
+  };
 
   const saveEdit = async () => {
     const t = edit;
     const upd = { name: t.name, chapter: t.chapter || "", notes: t.notes || "" };
+    if (t.status === "open") {
+      const tg = Math.max(0, Number(t.taught) || 0), dates = (t.taughtDates || []).slice(0, tg);
+      while (dates.length < tg) dates.push(today);
+      Object.assign(upd, { total: Math.max(1, Number(t.total) || 6), taught: tg, studied: Math.min(tg, Math.max(0, Number(t.studied) || 0)), taughtDates: dates });
+    }
     if (t.status === "active") {
       upd.difficulty = t.difficulty;
       upd.nextDue = addDays(t.lastDone, DIFFS[t.difficulty].days[Math.min(t.stage || 0, 2)]);
@@ -175,27 +204,32 @@ export default function JEE({ userId, fabTrigger }) {
             {t.subject}{t.chapter ? ` / ${t.chapter}` : ""}
             {kind === "backlog" && ` / taught ${nice(t.taughtDate)}`}
             {kind === "ongoing" && ` / started ${nice(t.startedDate)}`}
+            {kind === "open" && ` / ${t.studied || 0} of ${t.total || "?"} studied, ${behindOf(t) ? `${behindOf(t)} behind` : "up to date"}`}
             {kind === "revise" && ` / ${late > 0 ? `${late}d overdue` : "due today"}`}
           </div>
         </div>
         {kind === "backlog" && <Tag label={`${ageOf(t, today)} backlog`} color={AGE_COLOR[ageOf(t, today)]} />}
         {kind === "ongoing" && <Tag label="ongoing" color="#f59e0b" />}
+        {kind === "open" && (behindOf(t) ? <Tag label={`${ageOf(t, today)} / ${behindOf(t)} behind`} color={AGE_COLOR[ageOf(t, today)]} /> : <Tag label="up to date" color="#10b981" />)}
         {kind === "revise" && <Tag label={DIFFS[t.difficulty].label} color={DIFFS[t.difficulty].color} />}
         <div style={{ display: "flex", gap: 6 }}>
           {kind === "backlog" && <button className="btn btn-ghost" style={btn} onClick={() => startBacklog(t)}>Start</button>}
           {kind === "backlog" && <button className="btn btn-primary" style={{ ...btn, background: s.accent }} onClick={() => setPick({ t, kind: "clear" })}>Clear</button>}
           {kind === "ongoing" && <button className="btn btn-primary" style={{ ...btn, background: s.accent }} onClick={() => setPick({ t, kind: "finish" })}>Finish</button>}
+          {kind === "open" && <button className="btn btn-ghost" style={btn} onClick={() => addTaught(t)}>+ Taught</button>}
+          {kind === "open" && behindOf(t) > 0 && <button className="btn btn-primary" style={{ ...btn, background: s.accent }} onClick={() => addStudied(t)}>+ Studied</button>}
+          {kind === "open" && <button className="btn btn-ghost" style={btn} onClick={() => setPick({ t, kind: "finish" })}>Finish</button>}
           {kind === "revise" && <button className="btn btn-primary" style={{ ...btn, background: s.accent }} onClick={() => setPick({ t, kind: "revise" })}>Revise</button>}
         </div>
       </div>
     );
   };
-  const kindOf = t => (t.status === "ongoing" ? "ongoing" : "backlog");
+  const kindOf = t => (t.status === "open" ? "open" : t.status === "ongoing" ? "ongoing" : "backlog");
   const Empty = ({ text }) => <div style={{ padding: "16px", fontFamily: "DM Mono", fontSize: 12, color: "var(--text-muted)" }}>{text}</div>;
   const Label = ({ children }) => <div style={{ padding: "10px 16px 6px", fontFamily: "Syne", fontSize: 11, fontWeight: 700, color: "var(--text-secondary)", letterSpacing: "0.04em" }}>{children}</div>;
 
   const tableItems = items.filter(t => t.subject === activeSubject).sort((a, b) => {
-    const o = { ongoing: 0, backlog: 1, active: 2 };
+    const o = { open: 0, ongoing: 0, backlog: 1, active: 2 };
     return o[a.status] - o[b.status] || (a.nextDue || "").localeCompare(b.nextDue || "");
   });
   const chartData = (scores[activeSubject] || []).map(s => ({ name: s.exam, marks: s.marks }));
@@ -226,6 +260,9 @@ export default function JEE({ userId, fabTrigger }) {
           <Label>LEARN</Label>
           {recLearn.length === 0 && <Empty text={LEARN_SLOTS[d] ? "Nothing queued. Log a backlog or a new topic." : "No new learning planned today."} />}
           {recLearn.map(t => <Row key={t.id} t={t} kind={kindOf(t)} />)}
+
+          {openOk.length > 0 && <Label>IN PROGRESS (UP TO DATE)</Label>}
+          {openOk.map(t => <Row key={t.id} t={t} kind="open" />)}
 
           <Label>REVISE</Label>
           {recRev.length === 0 && <Empty text={REV_SLOTS[d] ? "Nothing due. You're clear." : "No revision day today."} />}
@@ -271,6 +308,7 @@ export default function JEE({ userId, fabTrigger }) {
             }}>
               <span style={{ fontSize: 18 }}>{s.icon}</span>
               <span style={{ fontSize: 11 }}>{s.label}</span>
+              <span style={{ fontSize: 9, opacity: 0.8, fontFamily: "DM Mono", fontWeight: 400 }}>{statusOf(key)}</span>
             </button>
           ))}
         </div>
@@ -301,6 +339,7 @@ export default function JEE({ userId, fabTrigger }) {
                       <td>
                         {t.status === "active" && <Tag label={DIFFS[t.difficulty].label} color={DIFFS[t.difficulty].color} />}
                         {t.status === "ongoing" && <Tag label="ongoing" color="#f59e0b" />}
+                        {t.status === "open" && <Tag label={`${t.studied || 0}/${t.total || "?"} studied`} color={behindOf(t) ? "#f59e0b" : "#10b981"} />}
                         {t.status === "backlog" && <Tag label={`${ageOf(t, today)} backlog`} color={AGE_COLOR[ageOf(t, today)]} />}
                       </td>
                       <td style={{ fontFamily: "DM Mono", fontSize: 11, color: over ? "#ef4444" : "var(--text-secondary)", whiteSpace: "nowrap" }}>
@@ -363,7 +402,7 @@ export default function JEE({ userId, fabTrigger }) {
       {log && (
         <Modal title="Log" accent={subj.accent} onClose={() => setLog(null)}>
           <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
-            {[["topic", "Topic"], ["backlog", "Backlog"]].map(([m, l]) => (
+            {[["module", "Module"], ["topic", "Topic"], ["backlog", "Backlog"]].map(([m, l]) => (
               <button key={m} className="btn" onClick={() => setLog(p => ({ ...p, mode: m }))} style={{
                 flex: 1, background: log.mode === m ? subj.accent : "transparent", color: log.mode === m ? "white" : "var(--text-secondary)", border: "1px solid var(--border)"
               }}>{l}</button>
@@ -379,6 +418,13 @@ export default function JEE({ userId, fabTrigger }) {
               </F>
               <F l="CHAPTER"><input className="input" placeholder="optional" value={log.chapter} onChange={e => setLog(p => ({ ...p, chapter: e.target.value }))} /></F>
             </div>
+            {log.mode === "module" && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                <F l="TOTAL CLASSES"><input className="input" type="number" min="1" value={log.total} onChange={e => setLog(p => ({ ...p, total: e.target.value }))} /></F>
+                <F l="TAUGHT"><input className="input" type="number" min="0" value={log.taught} onChange={e => setLog(p => ({ ...p, taught: e.target.value }))} /></F>
+                <F l="STUDIED"><input className="input" type="number" min="0" value={log.studied} onChange={e => setLog(p => ({ ...p, studied: e.target.value }))} /></F>
+              </div>
+            )}
             {log.mode === "topic" && (
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                 <F l="PROGRESS">
@@ -396,13 +442,13 @@ export default function JEE({ userId, fabTrigger }) {
                 )}
               </div>
             )}
-            <F l={log.mode === "backlog" ? "TAUGHT IN CLASS ON" : "DATE STUDIED"}>
+            <F l={log.mode === "backlog" ? "TAUGHT IN CLASS ON" : log.mode === "module" ? "CLASSES TAUGHT ON" : "DATE STUDIED"}>
               <input className="input" type="date" value={log.date} max={today} onChange={e => setLog(p => ({ ...p, date: e.target.value }))} />
             </F>
           </div>
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 20 }}>
             <button className="btn btn-ghost" onClick={() => setLog(null)}>Cancel</button>
-            <button className="btn btn-primary" style={{ background: subj.accent }} onClick={submitLog}>{log.mode === "backlog" ? "Log backlog" : "Log topic"}</button>
+            <button className="btn btn-primary" style={{ background: subj.accent }} onClick={submitLog}>{log.mode === "backlog" ? "Log backlog" : log.mode === "module" ? "Log module" : "Log topic"}</button>
           </div>
         </Modal>
       )}
@@ -439,6 +485,13 @@ export default function JEE({ userId, fabTrigger }) {
                   {Object.entries(DIFFS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
                 </select>
               </F>
+            )}
+            {edit.status === "open" && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                <F l="TOTAL"><input className="input" type="number" min="1" value={edit.total || ""} onChange={e => setEdit(p => ({ ...p, total: e.target.value }))} /></F>
+                <F l="TAUGHT"><input className="input" type="number" min="0" value={edit.taught ?? 0} onChange={e => setEdit(p => ({ ...p, taught: e.target.value }))} /></F>
+                <F l="STUDIED"><input className="input" type="number" min="0" value={edit.studied ?? 0} onChange={e => setEdit(p => ({ ...p, studied: e.target.value }))} /></F>
+              </div>
             )}
             <F l="NOTES / LINK"><input className="input" placeholder="Quick note or Drive link" value={edit.notes || ""} onChange={e => setEdit(p => ({ ...p, notes: e.target.value }))} /></F>
             {edit.status === "active" && (
